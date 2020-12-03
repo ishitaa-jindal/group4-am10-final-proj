@@ -1,0 +1,346 @@
+---
+title: "Final Project"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+75 years after the founding of the UN, women and girls still face inequality. What factors are influencing this inequality and which can be adopted? Using data from the World Bank, OECD, and the United Nations, we perform an analysis and try explaining some of these trends using statistical analysis and visualizations. We focus on Europe’s top & bottom 3 countries to avoid distortion by structural differences between different regions of the world and identify key events that led to some major changes in the inequality patterns for our chosen countries - which are:
+
+- Best 3 in terms of GII: Netherlands, Denmark, Switzerland
+- Worst 3 in terms of Gender Inequality Index: Hungary, Latvia, Poland
+
+The main objectives are:
+
+- Visualise the pay gap between men and women around the world
+- Compare participation in the job market between men and women
+- Determine which countries are best and worst in terms of gender equality in Europe
+- Determine female presence in government in the 6 countries
+- Look at the different dimensions that are used to calculate the Gender Inequality Index value
+
+The data we analyse can be found in the data folder of the repository https://github.com/maddy-g6/group4-am10-final-proj
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+library(recommenderlab)
+library(ggplot2)                       
+library(data.table)
+library(reshape2)
+library(data.table)
+library(dplyr)
+library(tidyverse)
+library(readxl)
+library(janitor)
+library(mosaic)
+library(ggthemes)
+library(lubridate)
+library(here)
+library(skimr)
+library(vroom)
+library(readr)
+library(huxtable)
+library(ggpubr)
+library(GGally)
+```
+
+## Data loading and wrangling
+
+We begin with loading our data sets on income for males and females for all countries in the world and merge them together into one dataframe. Further, we combine Human Development Index (HDI) data with the income data-frame for all years:
+
+```{r pressure, echo=FALSE, message=FALSE}
+# Load Data Sets for Income
+male_income <- read_excel("Estimated gross income male.xlsx")
+female_income <- read_excel("Estimated gross income female.xlsx")
+# Due to data_errors, the HDI CSV has to be edited manually before it could be imported.
+# In the original file 2 different tables were included and the second one for regions and high/medium/low definition had to be erased
+# Furthermore, there were changing delimiters between data points (double quote, double comma,...) and ".." for NA
+# Finally, the values for 2017 and 2018 were not adjusted and too high by the factor of 1000
+hdi <- vroom("HDI cleaned.csv", skip = 1)
+```
+
+```{r}
+# Take Initial Look at Data
+
+#glimpse(male_income)
+#glimpse(female_income)
+#glimpse(hdi)
+#head(male_income,5)
+#head(female_income,5)
+#head(hdi,5)
+
+# clean names for hdi
+names(hdi)[names(hdi) == "HDI Rank (2018)"] <- "hdi_rank_2018"
+# Set column type right for hdi
+hdi <- hdi %>% 
+  mutate("1990" = as.numeric("1990"))
+# Select only the years used in the income data frame
+hdi <- hdi %>% 
+  select(Country,
+         "1995","2000","2005","2010",
+         "2011","2012","2013","2014",
+         "2015","2016","2017","2018")
+# Pivot longer hdi the table to get years as values in a column
+hdi <- hdi %>% 
+  pivot_longer(2:13, 
+               names_to = "Year", 
+               values_to = "hdi")
+# Pivot longer both the table to get years as values in a column
+male_income <- male_income %>% 
+  pivot_longer(3:14, 
+               names_to = "Year", 
+               values_to = "income_male")
+female_income <- female_income %>% 
+  pivot_longer(3:14, 
+               names_to = "Year", 
+               values_to = "income_female")
+# inner join male and female tables on country
+all_income <- merge(male_income, 
+                    female_income, 
+                    by = c("Country",
+                           "Year","HDI Rank (2018)"))
+# Join hdi on income data frame
+all_income_hdi <- merge(all_income,
+                        hdi,
+                        by = c("Year","Country"))
+# Look at the first rows
+head(all_income_hdi)
+# Export as CSV file "Income Data"
+write.csv(all_income_hdi, 
+          "all_income_hdi.csv")
+# Clean names using Janitor package
+all_income_hdi <- clean_names(all_income_hdi)
+# Create a continent variable
+library(countrycode)
+continent <- countrycode(sourcevar = all_income_hdi[, "country"],
+                            origin = "country.name",
+                            destination = "continent")
+all_income_hdi <- cbind(all_income_hdi, continent)
+# create a gender pay gap (%) variable as percentage of male income
+all_income_hdi <- all_income_hdi %>% 
+  mutate(perc_gender_pay_gap = ((income_male - income_female)/income_male)*100)
+str(all_income_hdi)
+#calculate summary statistics and observe missing values if any
+skimr::skim(all_income_hdi)
+```
+
+## Data cleaning
+
+In this step, we find missing values and remove them from our data and proceed with checking if the data is technically correct i.e. has the correct data types:
+
+```{r}
+# Check for impossible or unrealistic data in HDI
+# None found
+all_income_hdi %>% 
+  filter(hdi > 1)
+
+# Fix data types and delete empty rows
+all_income_hdi <- all_income_hdi %>% 
+  #delete empty rows
+  filter(!is.na(all_income_hdi)) %>%  
+  # year as a numerical
+  mutate(year = as.double(year), 
+         continent = factor(continent))
+str(all_income_hdi)
+
+```
+
+### Visualise Extreme Data 
+
+In this part we are visualising our dataset using boxplots, in order to identify outliers and proceed with filtering our extreme values:
+
+```{r warning=FALSE, message=FALSE}
+# Observe extreme values
+cleaning_box_1 <- 
+  ggplot(all_income_hdi, aes(y=hdi_rank_2018)) +
+  geom_boxplot(colour="#00A699")+
+  labs(y="HDI Rank")+
+  theme(plot.title = element_text(face = "bold")) +
+  theme(plot.subtitle = element_text(face = "bold", color = "grey35")) +
+  theme(plot.caption = element_text(color = "grey68")) + 
+  NULL
+cleaning_box_2 <-
+  ggplot(all_income_hdi, aes(y=income_male)) +
+  geom_boxplot(colour="#00A699")+
+  labs(y="Male Income")+
+  theme(plot.title = element_text(face = "bold")) +
+  theme(plot.subtitle = element_text(face = "bold", color = "grey35")) +
+  theme(plot.caption = element_text(color = "grey68")) + 
+  NULL
+cleaning_box_3 <-
+  ggplot(all_income_hdi, aes(y=income_female)) +
+  geom_boxplot(colour="#00A699")+
+  labs(y="Female Income") +
+  theme(plot.title = element_text(face = "bold")) +
+  theme(plot.subtitle = element_text(face = "bold", color = "grey35")) +
+  theme(plot.caption = element_text(color = "grey68")) + 
+  NULL
+combined_box_plots <- 
+  ggarrange(cleaning_box_1, 
+            cleaning_box_2, 
+            cleaning_box_3,
+            ncol = 2, nrow = 2) +
+  theme_bw()+
+  theme(panel.border = element_rect(fill=NA, size=1))
+  NULL
+annotate_figure(combined_box_plots, top = text_grob("Extreme Values by Variable", face = "bold"))
+# Explore the extreme values to ensure they make sense
+all_income_hdi %>% 
+  filter(income_male > 100000 | income_female > 60000) %>% 
+  arrange(desc(income_female))
+ 
+# visualise the dependent variable
+```
+
+As expected the middle east mainly accounts for the extreme values in male income, whilst interestingly enough Singapore and Brunei account for the majority of extreme values in female incomes. Nevertheless, following research we can conclude that there are no data entry issues with our dataset
+
+## Data Exploration
+
+We explore our data to find the top high and low pay gap countries for the most recent year that we have which is 2018, the average pay gap by continent and number of countries that have a paygap greater than 50%. The results are interesting and show that over time things are getting better for most of the regions all around the world.
+
+```{r warning=FALSE, message=FALSE}
+# Find the top 10 highest paygap and the lower 10 paygap for 2018
+top_10 <- all_income_hdi %>% 
+  filter(year == 2018) %>% 
+  top_n(10, perc_gender_pay_gap)
+low_10 <- all_income_hdi %>% 
+  filter(year == 2018) %>% 
+  top_n(-10, perc_gender_pay_gap)
+# Find average pay gap in 2018 by continent
+by_continent <- all_income_hdi %>% 
+  filter(year == 2018) %>% 
+  group_by(continent) %>%
+  summarise(avg_perc_paygap = mean(perc_gender_pay_gap),
+            avg_hdi = mean(hdi)) %>% 
+  arrange(desc(avg_hdi))
+# Find the number of countries with a paygap greater than 50% by continent in 1995 vs 2018
+change <- all_income_hdi %>% 
+  filter(year %in% c(1995, 2018)) %>% 
+  group_by(continent, year) %>% 
+  summarise(count = count(perc_gender_pay_gap > 50))
+## Things are getting better!!!
+```
+
+
+## Correlation Matrix 
+
+We make a correlation matrix to observe the interaction between variables and specially focus on analysiing the relation of various factors with the percentage gender pay gap:
+
+```{r warning=FALSE, message=FALSE}
+#create correlation matrix for variables with data type "double"
+correlation_matrix <- all_income_hdi %>% 
+  summarise(
+         year,
+         hdi,
+         income_male,
+         income_female,
+         continent,
+         perc_gender_pay_gap)
+#have a look on the correlation matrix data
+glimpse(correlation_matrix)
+#show the correlations
+ggpairs(correlation_matrix, columns=1:6,
+    upper=list(continuous='cor'),
+    lower=list(continuous = 'points'),
+    diag=list(continuous='density'),
+    axisLabels='show') +
+    theme_bw()+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) 
+  
+```
+
+### Hypothesis Testing 
+
+We build confidence intervals for male and female income and see if the difference is significant at a 95% confidence interval using hypothesis testing where our null hypothesis is: There is no difference between male and female income.
+
+```{r warning=FALSE, message=FALSE}
+
+# create groups for our top and bottom 3 countries in Europe
+top_3 <- c("Netherlands","Switzerland","Denmark")
+bottom3 <- c("Hungary","Poland","Latvia")
+our_6 <- c("Netherlands","Switzerland","Denmark","Hungary","Poland","Latvia")
+
+# filter data for our 6 countries
+filtered <- all_income_hdi %>% 
+  subset(all_income_hdi$country %in% our_6) %>% 
+  rename(female= income_female) %>% 
+  rename(male = income_male) %>% 
+  pivot_longer(4:5, names_to = "Gender", values_to = "Income")
+  
+#filtered
+
+# build confidence interval 
+filtered %>%
+  group_by(Gender) %>%
+  filter(!is.na(Income)) %>% 
+  summarise(mean_income = mean(Income, na.rm = TRUE),
+            sd_income = sd(Income, na.rm=TRUE),
+            count = n(),
+            se_income = sd_income/sqrt(count),
+            t_critical = qt(0.975, count-1), 
+            margin_of_error = t_critical * se_income,
+            lower = mean_income - t_critical * se_income,
+            upper = mean_income + t_critical * se_income
+            )
+
+# perform hypothesis test
+t.test(Income ~ Gender, data = filtered)
+
+```
+
+We see that the confidence intervals don't overlap and clearly, we can reject the null hypothesis since the t score is greater than 2 and say with 95% confidence that the difference with respect to gender is significant.
+
+Next, we check if the difference in the percentage gender gap is considerably different for the top 3 compared to the bottom 3 countries in Europe.
+Once again, we can say with 95% confidence that the difference is significant.
+
+```{r warning=FALSE, message=FALSE}
+
+by_country <- filtered %>% 
+  mutate(top_or_bottom = ifelse(country %in% top_3, 'top', 'bottom'))
+
+by_country %>%
+  group_by(top_or_bottom) %>%
+  filter(!is.na(perc_gender_pay_gap)) %>% 
+  summarise(mean_gap = mean(perc_gender_pay_gap, na.rm = TRUE),
+            sd_gap = sd(perc_gender_pay_gap, na.rm=TRUE),
+            count = n(),
+            se_gap = sd_gap/sqrt(count),
+            t_critical = qt(0.975, count-1), 
+            margin_of_error = t_critical * se_gap,
+            lower = mean_gap - t_critical * se_gap,
+            upper = mean_gap + t_critical * se_gap
+            )
+
+t.test(perc_gender_pay_gap ~ top_or_bottom, data = by_country)
+
+```
+
+
+### Regression Analysis
+
+We begin building a linear regression model for the gender pay gap. Work is in progress as we try to find and merge more factors that may have an effect on our dependent variable to make a more meaningful model.
+
+Our first models are shown below:
+
+```{r warning=FALSE, message=FALSE}
+##makes first 2 models using instructions from Kostis
+model1 <- lm(perc_gender_pay_gap ~
+               hdi,
+             data = all_income_hdi)
+model2 <- lm(perc_gender_pay_gap ~
+               hdi +
+             year,
+             data = all_income_hdi)
+#model 3 adds the factor variable continent
+model3 <- lm(perc_gender_pay_gap ~
+               hdi +
+             year +
+             continent,
+             data = all_income_hdi)
+huxreg(model1, model2, model3)
+str(all_income_hdi)
+## still trying to find more variables to utilise to make a more meaningful model 
+```
